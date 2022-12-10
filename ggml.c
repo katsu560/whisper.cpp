@@ -313,7 +313,44 @@ inline static void ggml_vec_set_i32(const int n, int32_t * x, const int32_t v) {
 
 inline static void ggml_vec_set_f16(const int n, ggml_fp16_t * x, const int32_t v) { for (int i = 0; i < n; ++i) x[i] = v; }
 
-inline static void ggml_vec_add_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i]; }
+//inline static void ggml_vec_add_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i]; }
+inline static void ggml_vec_add_f32 (const int n, float * z, const float * x, const float * y) {
+#if defined(__AVX__) || defined(__AVX2__)
+    // AVX 256-bit
+    const int n32 = (n & ~31);
+    __m256 x0, x1, x2, x3;
+    __m256 y0, y1, y2, y3;
+
+    for (int i = 0; i < n32; i += 32) {
+        x0 = _mm256_loadu_ps(x + i + 0);
+        x1 = _mm256_loadu_ps(x + i + 8);
+        x2 = _mm256_loadu_ps(x + i + 16);
+        x3 = _mm256_loadu_ps(x + i + 24);
+
+        y0 = _mm256_loadu_ps(y + i + 0);
+        y1 = _mm256_loadu_ps(y + i + 8);
+        y2 = _mm256_loadu_ps(y + i + 16);
+        y3 = _mm256_loadu_ps(y + i + 24);
+
+	y0 = _mm256_add_ps(x0, y0);
+	y1 = _mm256_add_ps(x1, y1);
+	y2 = _mm256_add_ps(x2, y2);
+	y3 = _mm256_add_ps(x3, y3);
+
+	_mm256_storeu_ps(z + i + 0, y0);
+	_mm256_storeu_ps(z + i + 8, y1);
+	_mm256_storeu_ps(z + i + 16, y2);
+	_mm256_storeu_ps(z + i + 24, y3);
+    }
+    // leftovers
+    for (int i = n32; i < n; ++i) {
+	z[i]  = x[i] + y[i];
+    }
+#else
+    for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i];
+#endif
+ }
+
 inline static void ggml_vec_acc_f32 (const int n, float * y, const float * x)                  { for (int i = 0; i < n; ++i) y[i] += x[i];        }
 inline static void ggml_vec_acc1_f32(const int n, float * y, const float   v)                  { for (int i = 0; i < n; ++i) y[i] += v;           }
 inline static void ggml_vec_sub_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i] - y[i]; }
