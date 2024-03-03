@@ -2118,7 +2118,7 @@ test_cp_script()
 #msg "test_cp_script"; VERBOSE=2; NOEXEC=$RET_TRUE; test_cp_script; exit 0
 #msg "test_cp_script"; VERBOSE=2; NOEXEC=$RET_FALSE; test_cp_script; exit 0
 
-# func:git_script ver: 2024.01.20
+# func:git_script ver: 2024.03.03
 # git push scripts ymd, UPDATENAME, FIXSHNAME, MKZIPNAME
 # git_script
 git_script()
@@ -2206,6 +2206,13 @@ git_script()
 	msg "git checkout $SCRIPT"
 	if [ $NOEXEC -eq $RET_FALSE ]; then
 		git checkout $SCRIPT
+		# first time?
+		if [ $? -eq $RET_OK ]; then
+			msg "git checkout -b $SCRIPT"
+			git checkout -b $SCRIPT || die $? "git_script: can not create $SCRIPT branch, exit"
+			msg "git push -u origin $SCRIPT"
+			git push -u origin $SCRIPT || die $? "git_script: can not create remote $SCRIPT branch, exit"
+		fi
 	fi
 	if [ $TIMESTAMPS -eq $RET_TRUE ]; then
 		# restore timestamps
