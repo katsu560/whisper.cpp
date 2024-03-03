@@ -1622,7 +1622,7 @@ do_sync()
 	fi
 	msg "git fetch"
 	if [ $NOEXEC -eq $RET_FALSE ]; then
-		git fetch
+		git fetch || die $? "can not git fetch, exit"
 	fi
 	msg "git reset --hard origin/master"
 	if [ $NOEXEC -eq $RET_FALSE ]; then
@@ -2260,6 +2260,12 @@ git_script()
 	msg "git pull origin $SCRIPT"
 	if [ $NOEXEC -eq $RET_FALSE ]; then
 		git pull origin $SCRIPT
+		if [ ! $? -eq $RET_OK ]; then
+			RETCODE=$?
+			msg "git checkout master"
+			git checkout master
+			die $RETCODE "git_script: RETCODE:$?: can not git pull origin $SCRIPT, exit"
+		fi
 	fi
 
 	if [ $VERBOSE -ge 1 ]; then
@@ -2428,7 +2434,14 @@ git_script()
 		fi
 		msg "git push origin $SCRIPT"
 		if [ $NOEXEC -eq $RET_FALSE ]; then
-			git push origin $SCRIPT
+			git push origin $SCRIPTi
+			RETCODE=$?
+			if [ ! $? -eq $RET_OK ]; then
+				emsg "back to $BRANCH"
+				msg "git checkout $BRANCH"
+				git checkout $BRANCH
+				die $RET_NG "can not git push origin $SCRIPT, exit"
+			fi
 		fi
 	
 		if [ $TIMESTAMPS -eq $RET_TRUE ]; then
@@ -2736,7 +2749,7 @@ msg "# date time: $DTTM0"
 # warning:  Clock skew detected.  Your build may be incomplete.
 msg "sudo ntpdate ntp.nict.jp"
 if [ $NOEXEC -eq $RET_FALSE ]; then
-	sudo ntpdate ntp.nict.jp
+	sudo ntpdate ntp.nict.jp || die $? "can not ntp sync, exit"
 fi
 
 # check
