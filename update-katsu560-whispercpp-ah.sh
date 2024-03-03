@@ -1504,6 +1504,29 @@ git_init()
 	#fi
 }
 
+# func:git_showinfo ver: 2024.03.03
+# show github info
+# git_showinfo
+git_showinfo()
+{
+	xmsg "git_showinfo: $*"
+
+	if [ x"$GITDIR" = x ]; then
+		die $ERR_BADSETTINGS "git_showinfo: need GITDIR, exit"
+	fi
+
+	# to GITDIR
+	msg "cd $GITDIR"
+	if [ $NOEXEC -eq $RET_FALSE ]; then
+		cd $GITDIR || die $? "can't cd $GITDIR, exit"
+	fi
+
+	msg "git config --list"
+	git config --list
+
+	return $RET_OK
+}
+
 # func:do_sync ver: 2024.02.12
 # update github token
 # git_updatetoken GITTOKEN [removeadd]
@@ -2130,6 +2153,7 @@ git_script()
 	local DT0 ADDFILES COMMITFILES
 	local DFUPDATE DFFIXSH DFMKZIP FUPDATE FFIXSH FMKZIP
 	local DFUPDATEG DFFIXSHG DFMKZIPG FUPDATEG FFIXSHG FMKZIPG
+	local TBRANCH
 
 	# check
 	if [ x"$BASEDIR" = x ]; then
@@ -2207,13 +2231,19 @@ git_script()
 	if [ $NOEXEC -eq $RET_FALSE ]; then
 		git checkout $SCRIPT
 		# first time?
-		if [ $? -eq $RET_OK ]; then
+		if [ ! $? -eq $RET_OK ]; then
 			msg "git checkout -b $SCRIPT"
 			git checkout -b $SCRIPT || die $? "git_script: can not create $SCRIPT branch, exit"
 			msg "git push -u origin $SCRIPT"
 			git push -u origin $SCRIPT || die $? "git_script: can not create remote $SCRIPT branch, exit"
 		fi
 	fi
+	# check branch
+	get_gitbranch TBRANCH
+	if [ ! x"$TBRANCH" = x"$SCRIPT" ]; then
+		die $ERR_NOTEXISTED "git_script: BRANCH:$TBRANCH: not $SCRIPT branch, exit"
+	fi
+
 	if [ $TIMESTAMPS -eq $RET_TRUE ]; then
 		# restore timestamps
 		msg "ls -lad $GITDIR/*"; ls -lad $GITDIR/*
@@ -2592,7 +2622,7 @@ usage()
 {
 	echo "usage: $MYNAME [-h][-v][-n][-f][-nd][-ncp][-nc][-ts][-noavx|avx|avx2][-ione][-sycl][-lv LEVEL] dirname branch cmd"
 	echo "       $MYNAME setup GITTOKEN"
-	echo "       $MYNAME [-h][-v][-n][-f][-nd][-ncp] token [TOKEN][OPT]"
+	echo "       $MYNAME [-h][-v][-n][-f][-nd][-ncp] token|gitinfo [TOKEN][OPT]"
 	echo "options: (default)"
 	echo "  -h|--help ... this message"
 	echo "  -v|--verbose ... increase verbose message level ($VERBOSE)"
@@ -2616,6 +2646,7 @@ usage()
 	echo ""
 	echo "  cmd ... setup .. setup $TOPDIR with GITTOKEN, git clone, init, download scripts"
 	echo "  cmd ... token [TOKEN][OPT] .. update git token with TOKEN, opt .. removeadd"
+	echo "  cmd ... gitinfo .. show github info"
 }
 # default -avx
 CMKOPT="$CMKOPTAVX"
@@ -2666,6 +2697,12 @@ if [ x"$1" = x"token" ]; then
 	shift
 	msg "git_updatetoken $*"
 	git_updatetoken $*
+	exit $?
+fi
+if [ x"$1" = x"gitinfo" ]; then
+	shift
+	msg "git_showinfo $*"
+	git_showinfo $*
 	exit $?
 fi
 
