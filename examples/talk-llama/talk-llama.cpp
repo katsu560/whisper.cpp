@@ -35,10 +35,10 @@ std::vector<llama_token> llama_tokenize(struct llama_context * ctx, const std::s
 
 std::string llama_token_to_piece(const struct llama_context * ctx, llama_token token) {
     std::vector<char> result(8, 0);
-    const int n_tokens = llama_token_to_piece(llama_get_model(ctx), token, result.data(), result.size());
+    const int n_tokens = llama_token_to_piece(llama_get_model(ctx), token, result.data(), result.size(), false);
     if (n_tokens < 0) {
         result.resize(-n_tokens);
-        int check = llama_token_to_piece(llama_get_model(ctx), token, result.data(), result.size());
+        int check = llama_token_to_piece(llama_get_model(ctx), token, result.data(), result.size(), false);
         GGML_ASSERT(check == -n_tokens);
     } else {
         result.resize(n_tokens);
@@ -59,13 +59,13 @@ struct whisper_params {
     float vad_thold  = 0.6f;
     float freq_thold = 100.0f;
 
-    bool speed_up       = false;
     bool translate      = false;
     bool print_special  = false;
     bool print_energy   = false;
     bool no_timestamps  = true;
     bool verbose_prompt = false;
     bool use_gpu        = true;
+    bool flash_attn     = false;
 
     std::string person      = "Georgi";
     std::string bot_name    = "LLaMA";
@@ -99,12 +99,12 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
         else if (arg == "-ngl" || arg == "--n-gpu-layers")   { params.n_gpu_layers   = std::stoi(argv[++i]); }
         else if (arg == "-vth" || arg == "--vad-thold")      { params.vad_thold      = std::stof(argv[++i]); }
         else if (arg == "-fth" || arg == "--freq-thold")     { params.freq_thold     = std::stof(argv[++i]); }
-        else if (arg == "-su"  || arg == "--speed-up")       { params.speed_up       = true; }
         else if (arg == "-tr"  || arg == "--translate")      { params.translate      = true; }
         else if (arg == "-ps"  || arg == "--print-special")  { params.print_special  = true; }
         else if (arg == "-pe"  || arg == "--print-energy")   { params.print_energy   = true; }
         else if (arg == "-vp"  || arg == "--verbose-prompt") { params.verbose_prompt = true; }
         else if (arg == "-ng"  || arg == "--no-gpu")         { params.use_gpu        = false; }
+        else if (arg == "-fa"  || arg == "--flash-attn")     { params.flash_attn     = true; }
         else if (arg == "-p"   || arg == "--person")         { params.person         = argv[++i]; }
         else if (arg == "-bn"   || arg == "--bot-name")      { params.bot_name       = argv[++i]; }
         else if (arg == "--session")                         { params.path_session   = argv[++i]; }
@@ -123,7 +123,6 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
             }
         }
         else if (arg == "-f"   || arg == "--file")          { params.fname_out     = argv[++i]; }
-        else if (arg == "-ng"  || arg == "--no-gpu")        { params.use_gpu       = false; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -148,12 +147,12 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -ngl N,   --n-gpu-layers N [%-7d] number of layers to store in VRAM\n",           params.n_gpu_layers);
     fprintf(stderr, "  -vth N,   --vad-thold N    [%-7.2f] voice activity detection threshold\n",        params.vad_thold);
     fprintf(stderr, "  -fth N,   --freq-thold N   [%-7.2f] high-pass frequency cutoff\n",                params.freq_thold);
-    fprintf(stderr, "  -su,      --speed-up       [%-7s] speed up audio by x2 (reduced accuracy)\n",     params.speed_up ? "true" : "false");
     fprintf(stderr, "  -tr,      --translate      [%-7s] translate from source language to english\n",   params.translate ? "true" : "false");
     fprintf(stderr, "  -ps,      --print-special  [%-7s] print special tokens\n",                        params.print_special ? "true" : "false");
     fprintf(stderr, "  -pe,      --print-energy   [%-7s] print sound energy (for debugging)\n",          params.print_energy ? "true" : "false");
     fprintf(stderr, "  -vp,      --verbose-prompt [%-7s] print prompt at start\n",                       params.verbose_prompt ? "true" : "false");
     fprintf(stderr, "  -ng,      --no-gpu         [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
+    fprintf(stderr, "  -fa,      --flash-attn     [%-7s] flash attention\n",                             params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -p NAME,  --person NAME    [%-7s] person name (for prompt selection)\n",          params.person.c_str());
     fprintf(stderr, "  -bn NAME, --bot-name NAME  [%-7s] bot name (to display)\n",                       params.bot_name.c_str());
     fprintf(stderr, "  -w TEXT,  --wake-command T [%-7s] wake-up command to listen for\n",               params.wake_cmd.c_str());
@@ -203,7 +202,6 @@ std::string transcribe(
     wparams.prompt_n_tokens  = prompt_tokens.empty() ? 0       : prompt_tokens.size();
 
     wparams.audio_ctx        = params.audio_ctx;
-    wparams.speed_up         = params.speed_up;
 
     if (whisper_full(ctx, wparams, pcmf32.data(), pcmf32.size()) != 0) {
         return "";
@@ -285,9 +283,15 @@ int main(int argc, char ** argv) {
     // whisper init
 
     struct whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = params.use_gpu;
+
+    cparams.use_gpu    = params.use_gpu;
+    cparams.flash_attn = params.flash_attn;
 
     struct whisper_context * ctx_wsp = whisper_init_from_file_with_params(params.model_wsp.c_str(), cparams);
+    if (!ctx_wsp) {
+        fprintf(stderr, "No whisper.cpp model specified. Please provide using -mw <modelfile>\n");
+        return 1;
+    }
 
     // llama init
 
@@ -301,6 +305,10 @@ int main(int argc, char ** argv) {
     }
 
     struct llama_model * model_llama = llama_load_model_from_file(params.model_llama.c_str(), lmparams);
+    if (!model_llama) {
+        fprintf(stderr, "No llama.cpp model specified. Please provide using -ml <modelfile>\n");
+        return 1;
+    }
 
     llama_context_params lcparams = llama_context_default_params();
 
@@ -308,6 +316,7 @@ int main(int argc, char ** argv) {
     lcparams.n_ctx      = 2048;
     lcparams.seed       = 1;
     lcparams.n_threads  = params.n_threads;
+    lcparams.flash_attn = params.flash_attn;
 
     struct llama_context * ctx_llama = llama_new_context_with_model(model_llama, lcparams);
 
@@ -391,6 +400,8 @@ int main(int argc, char ** argv) {
 
     prompt_llama = ::replace(prompt_llama, "{4}", chat_symb);
 
+    llama_batch batch = llama_batch_init(llama_n_ctx(ctx_llama), 0, 1);
+
     // init session
     std::string path_session = params.path_session;
     std::vector<llama_token> session_tokens;
@@ -426,8 +437,21 @@ int main(int argc, char ** argv) {
     printf("\n");
     printf("%s : initializing - please wait ...\n", __func__);
 
-    if (llama_eval(ctx_llama, embd_inp.data(), embd_inp.size(), 0)) {
-        fprintf(stderr, "%s : failed to eval\n", __func__);
+    // prepare batch
+    {
+        batch.n_tokens = embd_inp.size();
+
+        for (int i = 0; i < batch.n_tokens; i++) {
+            batch.token[i]     = embd_inp[i];
+            batch.pos[i]       = i;
+            batch.n_seq_id[i]  = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i]    = i == batch.n_tokens - 1;
+        }
+    }
+
+    if (llama_decode(ctx_llama, batch)) {
+        fprintf(stderr, "%s : failed to decode\n", __func__);
         return 1;
     }
 
@@ -647,8 +671,21 @@ int main(int argc, char ** argv) {
                             n_session_consumed = session_tokens.size();
                         }
 
-                        if (llama_eval(ctx_llama, embd.data(), embd.size(), n_past)) {
-                            fprintf(stderr, "%s : failed to eval\n", __func__);
+                        // prepare batch
+                        {
+                            batch.n_tokens = embd.size();
+
+                            for (int i = 0; i < batch.n_tokens; i++) {
+                                batch.token[i]     = embd[i];
+                                batch.pos[i]       = n_past + i;
+                                batch.n_seq_id[i]  = 1;
+                                batch.seq_id[i][0] = 0;
+                                batch.logits[i]    = i == batch.n_tokens - 1;
+                            }
+                        }
+
+                        if (llama_decode(ctx_llama, batch)) {
+                            fprintf(stderr, "%s : failed to decode\n", __func__);
                             return 1;
                         }
                     }
